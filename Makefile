@@ -1,30 +1,49 @@
 include .env
 export
 
+# Hide the commands being run
 MAKEFLAGS += --silent
+
+# Define an ABSOLUTE variable in case this files moves somewhere in your computer along with the config files.
 ABSOLUTE := $(realpath .)
 
 # APP-SPECIFIC VARIABLES
 xAppName := ${APP_NAME}
-xVersion := ${APP_VERSION}
+xDevUsername := ${DEV_USERNAME}
+xAppVersion := ${APP_VERSION}
+xTestFile := ${X_TEST_FILE}
 
 # AWS VARIABLES
+## Variables used mostly by the CLI
 profile := ${AWS_DEPLOYMENT_PROFILE}
 region := ${AWS_DEPLOYMENT_REGION}
+
+## Variables used to define stack names
 bucketProcessName := app-${xAppName}-buckets
 deployProcessName := app-${xAppName}-deploy
+ec2efsProcessName := datasync-ec2-efs
 
+## S3 Bucket names
 deployBucketName := ${deployProcessName}
 cdnBucketName := app-${xAppName}-cdn
 
-fileLambdaLog := lambda.log.json
+## Some EC2 variables
+ec2KeyName := app_ec2_${xDevUsername}
+ec2Instance := ${AWS_EC2_INSTANCE}
+ec2User := ec2-user
+
+## Local files references
 fileHandler := ${APP_HANDLER}
+fileLambdaLog := lambda.log.json
+
 
 # TEMPLATES
-tempBucket := buckets.yml
+tempBucket := app_buckets.yml
+tempEC2EFS := app_ec2_efs.yml
 tempApp := app.yml
 tempAppGenerated := app.generated.yml
 
+# COLORS
 n := \033[0m
 b := \033[34m
 
@@ -32,6 +51,12 @@ b := \033[34m
 init:
 	curl -sf https://gobinaries.com/tj/node-prune | sh
 
+# To update a Lambda function whose source code is in an Amazon S3 bucket, 
+# you must trigger an update by updating the S3Bucket, S3Key, or S3ObjectVersion property. 
+# Updating the source code alone doesn't update the function.
+# https://stackoverflow.com/q/47426248/9077800
+# https://aws.amazon.com/blogs/compute/new-deployment-options-for-aws-lambda/
+# However, a timestamp in the zip's name solves it! As the reference of Lambda changes, it will update.
 save-timestamp:
 	$(eval timestamp := $(shell date +%s))
 	$(shell echo "${timestamp}" > deploy.timestamp)
@@ -42,6 +67,7 @@ runtime-variables:
 	$(eval fileZip := ${xAppName}-${zipTimestamp}.zip)
 
 check: runtime-variables
+	echo "${xAppVersion}/${fileZip}"
 	echo "zipTimestamp ${zipTimestamp}"
 	echo "${n}profile: ${b}${profile}"
 	echo "${n}region: ${b}${region}"
@@ -60,7 +86,7 @@ check: runtime-variables
 saas-buckets:
 	aws cloudformation \
 		--profile ${profile} \
-	deploy\
+	deploy \
 		--capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
 		--force-upload \
 		--parameter-overrides \
@@ -69,12 +95,48 @@ saas-buckets:
 		--stack-name ${bucketProcessName} \
 		--template-file ${tempBucket}
 
+# Create EC2 Key Pairs
+saas-ec2-keys:
+	@if [[ -f "${ec2KeyName}.pem" ]]; then \
+		echo "File ${ec2KeyName} already exists, creation skipped."; \
+	else \
+		aws ec2 \
+			--profile ${profile} \
+		create-key-pair \
+			--key-name ${ec2KeyName} \
+			--query 'KeyMaterial' \
+			--output text > ${ec2KeyName}.pem; \
+		chmod 400 ${ec2KeyName}.pem; \
+	fi 
+
+# Create EC2 and EFS resources
+saas-ec2-efs: saas-ec2-keys
+	aws cloudformation \
+		--profile ${profile} \
+	deploy \
+		--capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
+		--template-file ${tempEC2EFS} \
+		--stack-name ${ec2efsProcessName} \
+		--parameter-overrides \
+			KeyName=${ec2KeyName} \
+			InstanceType=t2.micro
+	echo "Created ec2 instance!"
+
+# Option `-o` prevents from having to verify the authenticity of the host
+ssh:
+	ssh -o "StrictHostKeyChecking no" -i ${ec2KeyName}.pem ${ec2User}@${ec2Instance}.${region}.compute.amazonaws.com
+
+# Build the nextjs app and handle its dependencies
 saas-next-install-build:
 	yarn
 	rm -rf .next
 	yarn build
 	yarn --pure-lockfile --production
 	node-prune node_modules
+
+# Push the nextjs bundle to EFS
+saas-push-bundle:
+	rsync -avz -e "ssh -i ${ec2KeyName}.pem" .next/ ${ec2User}@${ec2Instance}.${region}.compute.amazonaws.com:/myEFSvolume/.next/
 
 # Zip the files that will go in S3 and be used as the Lambda function
 saas-zip:
@@ -88,8 +150,9 @@ saas-aws-upload:
 	--profile ${profile} \
 	--exclude .DS_Store \
 	--delete \
-	./zips s3://${deployBucketName}/${xVersion}/
+	./zips s3://${deployBucketName}/${xAppVersion}/
 
+# Generate the template with SAM
 saas-aws-sam:
 	echo "Running AWS SAM to push the CodeUri and generate a template"
 	aws cloudformation \
@@ -100,11 +163,7 @@ saas-aws-sam:
 		--s3-prefix latest \
 		--template ${tempApp}
 
-# To update a Lambda function whose source code is in an Amazon S3 bucket, 
-# you must trigger an update by updating the S3Bucket, S3Key, or S3ObjectVersion property. 
-# Updating the source code alone doesn't update the function.
-# https://stackoverflow.com/q/47426248/9077800
-# https://aws.amazon.com/blogs/compute/new-deployment-options-for-aws-lambda/
+# Deploy our Lambda function
 saas-aws-deploy:
 	echo "Deploying your stack to cloudformation ${fileZip}"
 	aws cloudformation \
@@ -114,34 +173,43 @@ saas-aws-deploy:
 		--force-upload \
 		--parameter-overrides \
 			deployProcessName=${deployProcessName} \
+			ec2efsProcessName=${ec2efsProcessName} \
 			deployBucketName=${deployBucketName} \
 			fileZip=${fileZip} \
 			fileHandler=${fileHandler} \
 			xAppName=${xAppName} \
+			xTestFile=${xTestFile} \
 			xHost=demo \
-			xVersion=${xVersion} \
+			xAppVersion=${xAppVersion} \
 		--stack-name ${deployProcessName} \
 		--template-file ${tempAppGenerated}
 
+# Create the buckets, ec2 instance, and efs that are necessary to our deployment
+prepare: check saas-buckets saas-ec2-efs
+	echo "\n🛠 Prepare done\n"
+
 # Create necessary buckets, zip files, and generate the CloudFormation template
-setup: save-timestamp runtime-variables check saas-buckets saas-next-install-build saas-zip saas-aws-sam
+setup: save-timestamp runtime-variables check saas-next-install-build saas-push-bundle saas-zip saas-aws-sam
 	echo "\n✅ Setup done\n"
 
 # Only push the lambda function
-push: runtime-variables saas-aws-deploy
-	echo "\n⭐ Push done\n"
+push: runtime-variables check saas-aws-sam saas-aws-deploy
+	echo "\n✨ Push done\n"
 
 # Deploy the whole app
 deploy: runtime-variables saas-aws-upload saas-aws-deploy
 	echo "\n🚀⭐ Deployment done\n"
 
+# Describe errors when the deployment fails
 describe:
 	aws cloudformation describe-stack-events --profile ${profile} --stack-name ${deployProcessName}
 
+# Get the logs, useful for Internal Server Errors.
 log:
 	aws lambda invoke \
 	--profile ${profile} \
 	--function-name app-${xAppName} ${fileLambdaLog}
 	echo "Your log is in ${fileLambdaLog}"
 
-all: setup deploy
+# Run all necessary commands to deploy this thing
+all: prepare setup deploy

@@ -2,6 +2,34 @@ const express = require("express");
 const next = require("next");
 const serverless = require("serverless-http");
 
+const path = require("path");
+const fs = require("fs").promises;
+
+const { X_MOUNT_PATH, X_TEST_FILE } = process.env;
+
+let filePaths = [];
+const errors = [];
+const content = [];
+
+const testFilePath = path.resolve(X_MOUNT_PATH, X_TEST_FILE);
+
+// Demonstrate that Lambda can access files from inside the EFS mounted volume
+(async () => {
+	try {
+		const fileContent = require(testFilePath);
+		content.push(fileContent);
+	} catch (err) {
+		errors.push("0--" + err.message);
+	}
+
+	try {
+		const files = await fs.readdir(X_MOUNT_PATH);
+		filePaths = filePaths.concat(files || []);
+	} catch (err) {
+		errors.push("1--" + err.message);
+	}
+})();
+
 function getServer() {
 	return new Promise(async (resolve, reject) => {
 		const server = express();
@@ -10,8 +38,14 @@ function getServer() {
 		await app.prepare();
 		const handle = app.getRequestHandler();
 
+		// When ready with the initial setups, you may uncomment this in order to serve the Next.js app
+		//
+		// server.all("*", (req, res) => {
+		// 	return handle(req, res);
+		// });
+
 		server.all("*", (req, res) => {
-			return handle(req, res);
+			return res.end(JSON.stringify({ testFilePath, filePaths, content, errors }, null, "\t"));
 		});
 
 		return resolve(server);

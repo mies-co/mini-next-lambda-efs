@@ -3,6 +3,8 @@ zips
 yarn.lock
 app.generated.yml
 deploy.timestamp
+app_ec2_*.pem
+.editorconfig
 
 .env
 

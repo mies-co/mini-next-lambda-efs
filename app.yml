@@ -18,11 +18,40 @@ Parameters:
     xHost:
         Type: String
         Default: demo
-    xVersion:
+    xAppVersion:
         Type: String
         Default: latest
+    xTestFile:
+        Type: String
+        Default: latest
+    xMountPath:
+        Default: "/mnt/efs0"
+        Description: File system mount path
+        Type: String
+    ec2efsProcessName:
+        Default: datasync-ec2-efs
+        Description: VPC and file system stack name
+        Type: String
 
 Resources:
+    # Let's create the endpoint from within this CF template instead of the one that creates EFS.
+    # So it remains flexible after EC2 and EFS have been created.
+    AccessPoint:
+        Type: AWS::EFS::AccessPoint
+        Properties:
+            FileSystemId:
+                Fn::ImportValue: !Sub "${ec2efsProcessName}-FileSystemID"
+            PosixUser:
+                Uid: "1001"
+                Gid: "1001"
+            RootDirectory:
+                CreationInfo:
+                    OwnerGid: "1001"
+                    OwnerUid: "1001"
+                    Permissions: "755"
+                # Enables the Lambda function to access the root of this EFS file system
+                # So the Lambda function will be able to access /mnt/efs0 -> mapped to the dir -> /myEFSvolume
+                Path: "/"
     IamRoleLambdaExecution:
         Type: AWS::IAM::Role
         Properties:
@@ -48,12 +77,13 @@ Resources:
                                 - "logs:CreateLogStream"
                                 - "logs:PutLogEvents"
                                 - "lambda:InvokeFunction"
+                                - "ec2:DescribeNetworkInterfaces"
+                                - "ec2:CreateNetworkInterface"
+                                - "ec2:DeleteNetworkInterface"
+                                - "ec2:DescribeInstances"
+                                - "ec2:AttachNetworkInterface"
                             Effect: "Allow"
-                            Resource:
-                                "*"
-                                # !Sub
-                                #   - 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${deployProcessNameRef}*:*'
-                                #   - { deployProcessNameRef: !Ref deployProcessName }
+                            Resource: "*"
             RoleName: !Sub
                 - "${deployProcessNameRef}-${AWS::Region}-lambdaRole"
                 - { deployProcessNameRef: !Ref deployProcessName }
@@ -61,13 +91,17 @@ Resources:
     LambdaApp:
         Type: AWS::Serverless::Function
         Properties:
+            Description: !Sub "The main function of ${xAppName)"
             CodeUri:
                 Bucket: !Ref deployBucketName
-                Key: !Sub "${xVersion}/${fileZip}"
+                Key: !Sub "${xAppVersion}/${fileZip}"
             Environment:
                 Variables:
                     NODE_ENV: production
                     X_HOST: !Ref xHost
+                    X_TEST_FILE: !Ref xTestFile
+                    # Enables us to use `const dir = process.env.X_MOUNT_PATH` inside our app
+                    X_MOUNT_PATH: !Ref xMountPath
             Events:
                 ProxyApiRoot:
                     Type: Api
@@ -84,13 +118,25 @@ Resources:
             FunctionName: !Sub
                 - "app-${xAppNameRef}"
                 - { xAppNameRef: !Ref xAppName }
+            FileSystemConfigs:
+                - LocalMountPath: !Ref xMountPath
+                  Arn: !GetAtt AccessPoint.Arn
             Handler: !Sub "${fileHandler}.handler"
+            VpcConfig:
+                SecurityGroupIds:
+                    - Fn::ImportValue: !Sub "${ec2efsProcessName}-MountTargetSecurityGroup"
+                SubnetIds:
+                    - Fn::ImportValue: !Sub "${ec2efsProcessName}-SubnetID"
             MemorySize: 1024
             Role: !GetAtt IamRoleLambdaExecution.Arn
             Runtime: "nodejs12.x"
             Timeout: 6
+            Policies:
+                - AWSLambdaVPCAccessExecutionRole
+                - AmazonElasticFileSystemClientReadWriteAccess
+                - AWSXRayDaemonWriteAccess
 
     ApiGatewayApp:
         Type: AWS::Serverless::Api
         Properties:
-            StageName: !Ref xVersion
+            StageName: !Ref xAppVersion
