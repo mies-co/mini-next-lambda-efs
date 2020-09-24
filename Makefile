@@ -4,19 +4,22 @@ export
 # Hide the commands being run
 MAKEFLAGS += --silent
 
-# Define an ABSOLUTE variable in case this files moves somewhere in your computer along with the config files.
-ABSOLUTE := $(realpath .)
+# Use this `__dirname` variable in case this file moves somewhere in your computer along with the config files.
+__dirname := $(shell dirname $(realpath $(firstword $(MAKEFILE_LIST))))
 
 # APP-SPECIFIC VARIABLES
 xAppName := ${APP_NAME}
 xDevUsername := ${DEV_USERNAME}
 xAppVersion := ${APP_VERSION}
 xTestFile := ${X_TEST_FILE}
+xMountPath := ${X_MOUNT_PATH}
 
 # AWS VARIABLES
 ## Variables used mostly by the CLI
 profile := ${AWS_DEPLOYMENT_PROFILE}
 region := ${AWS_DEPLOYMENT_REGION}
+efsMountPoint := ${AWS_EFS_MOUNT_POINT}
+efsVolumeName := ${AWS_EFS_VOLUME_NAME}
 
 ## Variables used to define stack names
 bucketProcessName := app-${xAppName}-buckets
@@ -82,6 +85,9 @@ check: runtime-variables
 	echo "${n}tempBucket: ${b}${tempBucket}"
 	echo "${n}tempApp: ${b}${tempApp}"
 	echo "${n}tempAppGenerated: ${b}${tempAppGenerated}"
+	echo "${n}efsMountPoint: ${b}${efsMountPoint}"
+	echo "${n}efsVolumeName: ${b}${efsVolumeName}"
+	echo "${n}xMountPath: ${b}${xMountPath}"
 	echo "${n}"
 
 # Create the initial buckets required by the app
@@ -121,6 +127,8 @@ saas-ec2-efs: saas-ec2-keys
 		--stack-name ${ec2efsProcessName} \
 		--parameter-overrides \
 			KeyName=${ec2KeyName} \
+			MountPoint=${efsMountPoint} \
+			VolumeName=${efsVolumeName} \
 			InstanceType=t2.micro
 	echo "Created ec2 instance!"
 
@@ -139,8 +147,8 @@ saas-next-install-build:
 # Add a sample helloworld.json file to /myEFSvolume
 # Push the nextjs bundle to EFS
 saas-push-bundle: runtime-variables
-	ssh -o "StrictHostKeyChecking no" -i ${ec2KeyName}.pem ${ec2Host} 'echo "{ \"hello\": \"world\" }" > /myEFSvolume/helloworld.json'
-	rsync -avz -e "ssh -i ${ec2KeyName}.pem" .next/ ${ec2Host}:/myEFSvolume/.next/
+	ssh -o "StrictHostKeyChecking no" -i ${ec2KeyName}.pem ${ec2Host} 'echo "{ \"hello\": \"world\" }" > /${efsMountPoint}/helloworld.json'
+	rsync -avz -e "ssh -i ${ec2KeyName}.pem" .next/ ${ec2Host}:/${efsMountPoint}/.next/
 
 # Zip the files that will go in S3 and be used as the Lambda function
 saas-zip:
@@ -184,6 +192,7 @@ saas-aws-deploy:
 			xAppName=${xAppName} \
 			xTestFile=${xTestFile} \
 			xHost=demo \
+			xMountPath=${xMountPath} \
 			xAppVersion=${xAppVersion} \
 		--stack-name ${deployProcessName} \
 		--template-file ${tempAppGenerated}

@@ -30,7 +30,7 @@ yarn start
 ## Install some helpers for the deployment
 
 ```sh
-yarn init
+yarn ini
 ```
 
 ## Deploy the whole app to AWS
@@ -38,7 +38,7 @@ yarn init
 First prepare it.
 
 ```sh
-yarn prepare
+yarn prep
 ```
 
 Now copy/paste the first part of the Public IPv4 DNS of your newly created EC2 instance in the .env file.

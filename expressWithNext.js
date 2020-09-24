@@ -7,28 +7,7 @@ const fs = require("fs").promises;
 
 const { X_MOUNT_PATH, X_TEST_FILE } = process.env;
 
-let filePaths = [];
-const errors = [];
-const content = [];
-
 const testFilePath = path.resolve(X_MOUNT_PATH, X_TEST_FILE);
-
-// Demonstrate that Lambda can access files from inside the EFS mounted volume
-(async () => {
-	try {
-		const fileContent = require(testFilePath);
-		content.push(fileContent);
-	} catch (err) {
-		errors.push("0--" + err.message);
-	}
-
-	try {
-		const files = await fs.readdir(X_MOUNT_PATH);
-		filePaths = filePaths.concat(files || []);
-	} catch (err) {
-		errors.push("1--" + err.message);
-	}
-})();
 
 function getServer() {
 	return new Promise(async (resolve, reject) => {
@@ -44,7 +23,26 @@ function getServer() {
 		// 	return handle(req, res);
 		// });
 
-		server.all("*", (req, res) => {
+		server.all("*", async (req, res) => {
+			let filePaths = [];
+			const errors = [];
+			const content = [];
+
+			// Demonstrate that Lambda can access files from inside the EFS mounted volume
+			try {
+				const fileContent = require(testFilePath);
+				content.push(fileContent);
+			} catch (err) {
+				errors.push("require error:" + err.message);
+			}
+
+			try {
+				const files = await fs.readdir(X_MOUNT_PATH);
+				filePaths = filePaths.concat(files || []);
+			} catch (err) {
+				errors.push("readdir error:" + err.message);
+			}
+
 			return res.end(JSON.stringify({ testFilePath, filePaths, content, errors }, null, "\t"));
 		});
 
