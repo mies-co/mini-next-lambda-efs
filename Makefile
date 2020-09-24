@@ -139,7 +139,7 @@ saas-next-install-build:
 # Add a sample helloworld.json file to /myEFSvolume
 # Push the nextjs bundle to EFS
 saas-push-bundle: runtime-variables
-	ssh -o "StrictHostKeyChecking no" -i ${ec2KeyName}.pem ${ec2Host} 'echo "{ \"hello\": \"world 02\" }" > /myEFSvolume/helloworld.json' \
+	ssh -o "StrictHostKeyChecking no" -i ${ec2KeyName}.pem ${ec2Host} 'echo "{ \"hello\": \"world\" }" > /myEFSvolume/helloworld.json'
 	rsync -avz -e "ssh -i ${ec2KeyName}.pem" .next/ ${ec2Host}:/myEFSvolume/.next/
 
 # Zip the files that will go in S3 and be used as the Lambda function
