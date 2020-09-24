@@ -65,10 +65,12 @@ runtime-variables:
 	# Timestamp will help create a unique zip
 	$(eval zipTimestamp := $(shell cat deploy.timestamp))
 	$(eval fileZip := ${xAppName}-${zipTimestamp}.zip)
+	$(eval ec2Host := ${ec2User}@${ec2Instance}.${region}.compute.amazonaws.com)
 
 check: runtime-variables
-	echo "${xAppVersion}/${fileZip}"
-	echo "zipTimestamp ${zipTimestamp}"
+	echo "${n}ec2Host: ${b}${ec2Host}"
+	echo "${n}zip file S3 location: ${b}${xAppVersion}/${fileZip}"
+	echo "${n}zipTimestamp: ${b}${zipTimestamp}"
 	echo "${n}profile: ${b}${profile}"
 	echo "${n}region: ${b}${region}"
 	echo "${n}bucketProcessName: ${b}${bucketProcessName}"
@@ -123,8 +125,8 @@ saas-ec2-efs: saas-ec2-keys
 	echo "Created ec2 instance!"
 
 # Option `-o` prevents from having to verify the authenticity of the host
-ssh:
-	ssh -o "StrictHostKeyChecking no" -i ${ec2KeyName}.pem ${ec2User}@${ec2Instance}.${region}.compute.amazonaws.com
+ssh: runtime-variables
+	ssh -o "StrictHostKeyChecking no" -i ${ec2KeyName}.pem ${ec2Host}
 
 # Build the nextjs app and handle its dependencies
 saas-next-install-build:
@@ -134,9 +136,11 @@ saas-next-install-build:
 	yarn --pure-lockfile --production
 	node-prune node_modules
 
+# Add a sample helloworld.json file to /myEFSvolume
 # Push the nextjs bundle to EFS
-saas-push-bundle:
-	rsync -avz -e "ssh -i ${ec2KeyName}.pem" .next/ ${ec2User}@${ec2Instance}.${region}.compute.amazonaws.com:/myEFSvolume/.next/
+saas-push-bundle: runtime-variables
+	ssh -o "StrictHostKeyChecking no" -i ${ec2KeyName}.pem ${ec2Host} 'echo "{ \"hello\": \"world 02\" }" > /myEFSvolume/helloworld.json' \
+	rsync -avz -e "ssh -i ${ec2KeyName}.pem" .next/ ${ec2Host}:/myEFSvolume/.next/
 
 # Zip the files that will go in S3 and be used as the Lambda function
 saas-zip:
