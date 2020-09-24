@@ -5,7 +5,7 @@
 	"license": "MIT",
 	"author": "Asten Mies",
 	"scripts": {
-		"postinstall": "cp -n .env.sample .env && echo \"Please define your env variables in the .env file\"",
+		"postinstall": "cp -n .env.sample .env || echo \"Please define your env variables in the .env file\"",
 		"dev": "export $(grep -v '^#' .env | xargs) && X_HOST=local node $APP_HANDLER",
 		"build": "next build",
 		"start": "NODE_ENV=production export $(grep -v '^#' .env | xargs) && X_HOST=local node $APP_HANDLER",
